@@ -44,10 +44,6 @@
 
         function processLastRequestResponse(lastRequest) {
             // if we already have made a request, just get the delta
-            if (lastRequest) {
-                dateBegins = lastRequest.timestamp;
-            }
-
             pipelineData
                 .commits(dateBegins, nowTimestamp, collectorItemId)
                 .then(function (response) {
@@ -102,7 +98,7 @@
 
         function processPipelineCommitData(team) {
             db.prodCommit.where('[collectorItemId+timestamp]').between([collectorItemId, ninetyDaysAgo], [collectorItemId, dateEnds]).toArray(function (rows) {
-                var uniqueRows = _.uniq(rows,'scmRevisionNumber');
+                var uniqueRows = _.uniqBy(rows,'scmRevisionNumber');
                 team.stages[prodStage] = _(uniqueRows).sortBy('timestamp').reverse().value();
 
                 var teamStageData = {},
@@ -111,6 +107,7 @@
 
                 // go backward through the stages and define commit data.
                 // reverse should make it easier to calculate time in the previous stage
+                var nextStageName = ''
                 _(stages).reverse().forEach(function (currentStageName) {
                     var commits = [], // store our new commit object
                         localStages = [].concat(ctrlStages), // create a copy of the stages
@@ -139,7 +136,9 @@
 
                         // use this time in our metric calculations
                         var timeInCurrentStage = nowTimestamp - currentStageTimestampCompare;
-                        stageDurations[currentStageName].push(timeInCurrentStage);
+                        if (nextStageName != '' && team.stages[nextStageName].length == 0) {
+                             stageDurations[currentStageName].push(timeInCurrentStage);
+                        }
 
                         // make sure current stage is set
                         commit.in[currentStageName] = timeInCurrentStage;
@@ -185,6 +184,7 @@
                     teamStageData[currentStageName] = {
                         commits: commits
                     }
+                    nextStageName = currentStageName;
                 });
 
                 // now that we've added all the duration data for all commits in each stage
@@ -242,7 +242,7 @@
                             // for this current stage, otherwise use the commit timestamp
                             var lastUpdatedDuration = _(stageData.commits).map(function (commit) {
                                     return commit.in[stageName] || moment().valueOf() - commit.timestamp;
-                                }).min().value(),
+                                }).min(),
                                 lastUpdated = moment().add(-1 * lastUpdatedDuration, 'milliseconds');
 
                             return {
@@ -294,36 +294,35 @@
                 });
 
                 // calculate info used in prod cell
-                var teamProdData = {
-                        averageDays: '--',
-                        totalCommits: 0
-                    },
-                    commitTimeToProd = _(team.stages)
-                    // limit to prod
-                        .filter(function (val, key) {
-                            return key == prodStage
-                        })
-                        // make all commits a single array
-                        .reduce(function (num, commits) {
-                            return num + commits;
-                        })
-                        // they should, but make sure the commits have a prod timestamp
-                        .filter(function (commit) {
-                            return commit.processedTimestamps && commit.processedTimestamps[prodStage];
-                        })
-                        // calculate their time to prod
-                        .map(function (commit) {
+                var commitTimeToProd;
+                var commitArray = _(team.stages)
+                // limit to prod
+                    .filter(function (val, key) {
+                        return key == prodStage
+                    })
+                    // make all commits a single array
+                    .reduce(function (num, commits) {
+                        return num + commits;
+                    });
+                if(!angular.isUndefined(commitArray)){
+                    // calculate their time to prod
+                    commitTimeToProd = commitArray.map(function (commit) {
                             return {
                                 duration: commit.processedTimestamps[prodStage] - commit.scmCommitTimestamp,
                                 commitTimestamp: commit.scmCommitTimestamp
                             };
                         });
+                }
 
+                var teamProdData = {
+                    averageDays: '--',
+                    totalCommits: 0
+                },commitTimeToProd;
 
-                teamProdData.totalCommits = commitTimeToProd.length;
+                teamProdData.totalCommits = !angular.isUndefined(commitTimeToProd)?commitTimeToProd.length:0;
 
-                if (commitTimeToProd.length > 1) {
-                    var averageDuration = _(commitTimeToProd).pluck('duration').reduce(function (a, b) {
+                if (!angular.isUndefined(commitTimeToProd)?commitTimeToProd.length:0 > 1) {
+                    var averageDuration = _(commitTimeToProd).map('duration').reduce(function (a, b) {
                             return a + b;
                         }) / commitTimeToProd.length;
 
